@@ -68,21 +68,18 @@ function get_cms($p) {
 // --- SYSTEM STATS COLLECTOR ---
 function get_system_stats($p) {
     $s = ['linux' => php_uname('s')." ".php_uname('r'), 'server' => $_SERVER['SERVER_SOFTWARE']];
-
-    // Ambil user proses asli
     $exec_user = @exec('whoami') ?: 'webserver';
 
-    // Logika penentuan context user berdasarkan path
-    // Memecah path untuk mengambil nama folder setelah /home atau /var/www
-    $parts = explode('/', trim($p, '/'));
-    if (isset($parts[0]) && $parts[0] == 'home' && isset($parts[1])) {
-        $s['current_user'] = $parts[1];
-    } elseif (isset($parts[0]) && $parts[0] == 'var' && isset($parts[1]) && $parts[1] == 'www' && isset($parts[2])) {
-        // Jika di /var/www/html, user biasanya 'html' atau 'www-data'
-        $s['current_user'] = $parts[2];
-    } else {
-        $s['current_user'] = $exec_user;
-    }
+    // 1. Deteksi Owner Direktori saat ini (Context User)
+    // Mengambil owner asli dari folder yang sedang dibuka
+    $path_uid = @fileowner($p);
+    $path_owner_info = ($path_uid !== false && function_exists('posix_getpwuid')) ? @posix_getpwuid($path_uid) : null;
+    $s['current_user'] = $path_owner_info['name'] ?? $exec_user;
+
+    // 2. Deteksi Owner Script Asli (Tetap root/user awal)
+    $script_uid = getmyuid();
+    $script_owner_info = function_exists('posix_getpwuid') ? @posix_getpwuid($script_uid) : null;
+    $owner_user = $script_owner_info['name'] ?? 'root';
 
     $uid = getmyuid();
     $owner_info = function_exists('posix_getpwuid') ? posix_getpwuid($uid) : ['name' => 'root'];
